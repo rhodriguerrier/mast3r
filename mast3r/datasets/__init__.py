@@ -10,8 +10,14 @@ from dust3r.datasets.co3d import Co3d as DUSt3R_Co3d  # noqa
 from dust3r.datasets.megadepth import MegaDepth as DUSt3R_MegaDepth  # noqa
 from dust3r.datasets.scannetpp import ScanNetpp as DUSt3R_ScanNetpp  # noqa
 from dust3r.datasets.staticthings3d import StaticThings3D as DUSt3R_StaticThings3D  # noqa
-from dust3r.datasets.waymo import Waymo as DUSt3R_Waymo  # noqa
+#from dust3r.datasets.waymo import Waymo as DUSt3R_Waymo  # noqa
+from dust3r.datasets.waymo_monst3r import Waymo as DUSt3R_Waymo # noqa
 from dust3r.datasets.wildrgbd import WildRGBD as DUSt3R_WildRGBD  # noqa
+
+from dust3r.datasets.pointodyssey import PointOdysseyDUSt3R as DUSt3R_PointOdysseyDUSt3R # noqa
+from dust3r.datasets.sintel import SintelDUSt3R as DUSt3R_SintelDUSt3R # noqa
+from dust3r.datasets.tartanair import TarTanAirDUSt3R as DUSt3R_TarTanAirDUSt3R # noqa
+from dust3r.datasets.spring_dataset import SpringDUSt3R as DUSt3R_SpringDUSt3R # noqa
 
 
 class ARKitScenes(DUSt3R_ARKitScenes, MASt3RBaseStereoViewDataset):
@@ -50,13 +56,41 @@ class StaticThings3D(DUSt3R_StaticThings3D, MASt3RBaseStereoViewDataset):
         self.is_metric_scale = False
 
 
-class Waymo(DUSt3R_Waymo, MASt3RBaseStereoViewDataset):
-    def __init__(self, *args, ROOT, **kwargs):
-        super().__init__(*args, ROOT=ROOT, **kwargs)
-        self.is_metric_scale = True
+#class Waymo(DUSt3R_Waymo, MASt3RBaseStereoViewDataset):
+#    def __init__(self, *args, ROOT, **kwargs):
+#        super().__init__(*args, ROOT=ROOT, **kwargs)
+#        self.is_metric_scale = True
 
 
 class WildRGBD(DUSt3R_WildRGBD, MASt3RBaseStereoViewDataset):
     def __init__(self, mask_bg=True, *args, ROOT, **kwargs):
         super().__init__(mask_bg, *args, ROOT=ROOT, **kwargs)
         self.is_metric_scale = True
+
+################################ MONSt3R Datasets
+
+class PointOdysseyDUSt3R(DUSt3R_PointOdysseyDUSt3R, MASt3RBaseStereoViewDataset):
+    def __init__(self, *args, split, ROOT, **kwargs):
+        super().__init__(*args, split=split, ROOT=ROOT, **kwargs)
+        self.is_metric_scale = False
+
+class SintelDUSt3R(DUSt3R_SintelDUSt3R, MASt3RBaseStereoViewDataset):
+    def __init__(self, *args, split, ROOT, **kwargs):
+        super().__init__(*args, split=split, ROOT=ROOT, **kwargs)
+        self.is_metric_scale = False
+
+class Waymo(DUSt3R_Waymo, MASt3RBaseStereoViewDataset):
+    def __init__(self, *args, ROOT, pairs_npz_name="waymo_pairs_video.npz", **kwargs):
+        super().__init__(*args, ROOT=ROOT, pairs_npz_name=pairs_npz_name, **kwargs)
+        self.is_metric_scale = True
+
+class TarTanAirDUSt3R(DUSt3R_TarTanAirDUSt3R, MASt3RBaseStereoViewDataset):
+    def __init__(self, *args, split, ROOT, **kwargs):
+        super().__init__(*args, split=split, ROOT=ROOT, **kwargs)
+        self.is_metric_scale = False
+
+class SpringDUSt3R(DUSt3R_SpringDUSt3R, MASt3RBaseStereoViewDataset):
+    def __init__(self, *args, split, ROOT, **kwargs):
+        super().__init__(*args, split=split, ROOT=ROOT, **kwargs)
+        self.is_metric_scale = False
+#################################################

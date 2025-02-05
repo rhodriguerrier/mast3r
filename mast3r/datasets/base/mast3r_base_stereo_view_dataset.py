@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import copy
 
-from mast3r.datasets.utils.cropping import (extract_correspondences_from_pts3d,
+from mast3r.datasets.utils.cropping import (extract_correspondences_from_pts3d, extract_point_correspondences,
                                             gen_random_crops, in2d_rect, crop_to_homography)
 
 import mast3r.utils.path_to_dust3r  # noqa
@@ -58,8 +58,13 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
             - first downsizes the image with LANCZOS inteprolation,
                 which is better than bilinear interpolation in
         """
+        ###
+        #frame_name = info.split("/")[-1].split(".jpg")[0]
+        ###
         if not isinstance(image, PIL.Image.Image):
             image = PIL.Image.fromarray(image)
+        #image.save(f"{frame_name}_before_cropping_function.jpg")
+        #print(f"BEFORE -> {image.size}, {resolution=}")
 
         # transpose the resolution if necessary
         W, H = image.size  # new size
@@ -75,14 +80,25 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
         # high-quality Lanczos down-scaling
         target_resolution = np.array(resolution)
         image, depthmap, intrinsics = cropping.rescale_image_depthmap(image, depthmap, intrinsics, target_resolution)
+        #image.save(f"{frame_name}_after_resize.jpg")
+        #print(f"MIDDLE -> {image.size}")
+        size_before_crop = image.size
 
         # actual cropping (if necessary) with bilinear interpolation
+        # no offset here; simple rescaling
+        # [16:15:39.217861] crop_image_depthmap -> (np.int32(0), np.int32(0), np.int32(512), np.int32(288))
+        # [16:15:39.920253] crop_image_depthmap -> (np.int32(85), np.int32(0), np.int32(597), np.int32(384))
         offset_factor = 0.5
         intrinsics2 = cropping.camera_matrix_of_crop(intrinsics, image.size, resolution, offset_factor=offset_factor)
         crop_bbox = cropping.bbox_from_intrinsics_in_out(intrinsics, intrinsics2, resolution)
         image, depthmap, intrinsics2 = cropping.crop_image_depthmap(image, depthmap, intrinsics, crop_bbox)
+        #print(f"AFTER -> {image.size}")
+        #print(f"crop_bbox -> {crop_bbox=}")
+        #if crop_bbox[0] != 0 or crop_bbox[1] != 0 or crop_bbox[2] != 512 or crop_bbox[3] != 288:
+        #    sys.exit(0)
+        #image.save(f"{frame_name}_after_cropping.jpg")
 
-        return image, depthmap, intrinsics2
+        return image, depthmap, intrinsics2, crop_bbox, size_before_crop
 
     def generate_crops_from_pair(self, view1, view2, resolution, aug_crop_arg, n_crops=4, rng=np.random):
         views = [view1, view2]
@@ -91,7 +107,7 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
             # compatibility
             for i in range(2):
                 view = views[i]
-                view['img'], view['depthmap'], view['camera_intrinsics'] = self._crop_resize_if_necessary(view['img'],
+                view['img'], view['depthmap'], view['camera_intrinsics'], _, _ = self._crop_resize_if_necessary(view['img'],
                                                                                                           view['depthmap'],
                                                                                                           view['camera_intrinsics'],
                                                                                                           resolution,
@@ -102,7 +118,8 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
             return
 
         # extract correspondences
-        corres = extract_correspondences_from_pts3d(*views, target_n_corres=None, rng=rng)
+        #corres = extract_correspondences_from_pts3d(*views, target_n_corres=None, rng=rng)
+        corres = extract_point_correspondences(*views, target_n_corres=None, rng=rng)
 
         # generate 4 random crops in each view
         view_crops = []
@@ -117,6 +134,9 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
                 aug_crop = max(.1 * S, aug_crop)  # for cropping: augment scale of at least 10%, and more if possible
             else:
                 aug_crop = aug_crop_arg
+            ###
+            #print(f"{aug_crop=}")
+            ###
 
             # tranpose the target resolution if necessary
             assert resolution[0] >= resolution[1]
@@ -144,6 +164,7 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
         crops = [view_crops[i][c] for i, c in enumerate(best)]
 
         # crop with the homography
+        #print(f"crops -> {crops=}")
         for i in range(2):
             view = views[i]
             imsize, K_new, R, H = crop_to_homography(view['camera_intrinsics'], crops[i], crops_resolution[i])
@@ -160,6 +181,12 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
             view['img'] = view['img'].transform(imsize, Image.Transform.PERSPECTIVE,
                                                 homo8,
                                                 resample=Image.Resampling.BICUBIC)
+
+            if "view_matches" in view:
+                mapping, view_matches = np.unique(view["view_matches"], return_inverse=True)
+                view_matches = view_matches.astype(np.uint32).reshape(view["view_matches"].shape)
+                res = np.array(Image.fromarray(view_matches).transform(imsize, Image.Transform.PERSPECTIVE, homo8))
+                view["view_matches"] = mapping[res]
 
             depthmap2 = depthmap_to_camera_coordinates(view['depthmap'], K_old)[0] @ R[:, 2]
             view['depthmap'] = np.array(Image.fromarray(depthmap2).transform(
@@ -239,12 +266,18 @@ class MASt3RBaseStereoViewDataset(BaseStereoViewDataset):
 
         # automatic extraction of correspondences from pts3d + pose
         if self.n_corres > 0 and ('corres' not in view):
-            corres1, corres2, valid = extract_correspondences_from_pts3d(*views, self.n_corres,
-                                                                         self._rng, nneg=self.nneg)
+            #corres1, corres2, valid, dynamic_corres = extract_correspondences_from_pts3d(
+            #    *views, self.n_corres, self._rng, nneg=self.nneg
+            #)
+            corres1, corres2, valid = extract_point_correspondences(
+                *views, self.n_corres, self._rng, nneg=self.nneg
+            )
             views[0]['corres'] = corres1
             views[1]['corres'] = corres2
             views[0]['valid_corres'] = valid
             views[1]['valid_corres'] = valid
+            #views[0]['dynamic_corres'] = dynamic_corres
+            #views[1]['dynamic_corres'] = dynamic_corres
 
         if self.aug_rot90 is False:
             pass

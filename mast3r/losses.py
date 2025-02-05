@@ -456,6 +456,17 @@ class MatchingLoss (Criterion, MultiLoss):
         loss, details = self.blockwise_criterion(descs1, descs2, confs1, confs2,
                                                  valid_matches, euc=monitoring.pop('use_euclidean_dist', False))
 
+        #with torch.no_grad():
+        #    dynamic_samples = (gt1['dynamic_corres'] * gt2['dynamic_corres'])
+        #    valid_n_dynamic = valid_matches * dynamic_samples
+        #    if torch.sum(valid_n_dynamic) != 0:
+        #        dynamic_loss, _ = self.blockwise_criterion(
+        #            descs1, descs2, confs1, confs2,
+        #            valid_n_dynamic,
+        #            euc=monitoring.pop('use_euclidean_dist', False)
+        #        )
+        #        print(f"{torch.mean(dynamic_loss).item()=}")
+
         details[type(self).__name__] = float(loss.mean())
         return loss, (details | monitoring)
 

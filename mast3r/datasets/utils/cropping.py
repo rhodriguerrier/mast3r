@@ -19,8 +19,105 @@ def reciprocal_1d(corres_1_to_2, corres_2_to_1, ret_recip=False):
     return pos1, pos2
 
 
+def extract_point_correspondences(view1, view2, target_n_corres, rng=np.random, ret_xy=True, nneg=0):
+    view1, view2 = to_numpy((view1, view2))
+    
+    ##################
+    coords1 = np.column_stack(np.nonzero(view1["view_matches"]))
+    values1 = view1["view_matches"][coords1[:, 0], coords1[:, 1]]
+
+    coords2 = np.column_stack(np.nonzero(view2["view_matches"]))
+    values2 = view2["view_matches"][coords2[:, 0], coords2[:, 1]]
+
+    # Find common values and their indices in both views
+    common_values, idx1, idx2 = np.intersect1d(values1, values2, return_indices=True)
+
+    # Get the corresponding coordinates
+    new_pos1_before = coords1[idx1][:, [1, 0]]
+    new_pos2_before = coords2[idx2][:, [1, 0]]
+    ##################
+
+    new_pos1 = ravel_xy(new_pos1_before, view1['pts3d'].shape[:2])
+    new_pos2 = ravel_xy(new_pos2_before, view2['pts3d'].shape[:2])
+
+    shape1, corres1_to_2 = reproject_view(view1['pts3d'], view2)
+    shape2, corres2_to_1 = reproject_view(view2['pts3d'], view1)
+    is_reciprocal1, pos1, pos2 = reciprocal_1d(corres1_to_2, corres2_to_1, ret_recip=True)
+    is_reciprocal2 = (corres1_to_2[corres2_to_1] == np.arange(len(corres2_to_1)))
+
+    if target_n_corres is None:
+        if ret_xy:
+            new_pos1 = unravel_xy(new_pos1, shape1)
+            new_pos2 = unravel_xy(new_pos2, shape2)
+        return new_pos1, new_pos2
+
+    available_negatives = min((~is_reciprocal1).sum(), (~is_reciprocal2).sum())
+    target_n_positives = int(target_n_corres * (1 - nneg))
+    n_positives = min(len(new_pos1), target_n_positives)
+    n_negatives = min(target_n_corres - n_positives, available_negatives)
+
+    # If not enough negatives, we will have to create negatives
+    extra_negatives = 0
+    if n_negatives + n_positives != target_n_corres:
+        extra_negatives = target_n_corres - (n_negatives + n_positives)
+
+    assert n_positives <= len(new_pos1)
+    assert n_positives <= len(new_pos2)
+
+    assert n_negatives <= (~is_reciprocal1).sum()
+    assert n_negatives <= (~is_reciprocal2).sum()
+    assert n_positives + n_negatives + extra_negatives == target_n_corres
+
+    valid = np.ones(n_positives, dtype=bool)
+    if n_positives < len(pos1):
+        perm = rng.permutation(len(new_pos1))[:n_positives]
+        new_pos1 = new_pos1[perm]
+        new_pos2 = new_pos2[perm]
+
+    if n_negatives > 0:
+        # add false correspondences if not enough
+        def norm(p): return p / p.sum()
+        new_pos1 = np.r_[new_pos1, rng.choice(shape1[0] * shape1[1], size=n_negatives, replace=False, p=norm(~is_reciprocal1))]
+        new_pos2 = np.r_[new_pos2, rng.choice(shape2[0] * shape2[1], size=n_negatives, replace=False, p=norm(~is_reciprocal2))]
+        valid = np.r_[valid, np.zeros(n_negatives, dtype=bool)]
+
+    if extra_negatives > 0:
+        max_idx = len(corres1_to_2)
+        extra_negs_pos1, extra_negs_pos2 = [], []
+        extra_negs_found = 0
+        while extra_negs_found < extra_negatives:
+            extra_neg_1, extra_neg_2 = np.random.randint(0, max_idx, size=1)[0], np.random.randint(0, max_idx, size=1)[0]
+            temp_pos1_idx = np.where(new_pos1 == extra_neg_1)
+            if np.sum(new_pos2[temp_pos1_idx] == extra_neg_2) == 0:
+                extra_negs_found += 1
+                extra_negs_pos1.append(extra_neg_1)
+                extra_negs_pos2.append(extra_neg_2)
+        new_pos1 = np.r_[new_pos1, np.array(extra_negs_pos1)]
+        new_pos2 = np.r_[new_pos2, np.array(extra_negs_pos2)]
+        valid = np.r_[valid, np.zeros(extra_negatives, dtype=bool)]
+
+    # convert (x+W*y) back to 2d (x,y) coordinates
+    if ret_xy:
+        new_pos1 = unravel_xy(new_pos1, shape1)
+        new_pos2 = unravel_xy(new_pos2, shape2)
+    return new_pos1, new_pos2, valid
+
+
 def extract_correspondences_from_pts3d(view1, view2, target_n_corres, rng=np.random, ret_xy=True, nneg=0):
     view1, view2 = to_numpy((view1, view2))
+
+    po_valid_points = view1["vis_n_valids"] * view2["vis_n_valids"]
+    _, temp_h, temp_w = view1['img'].shape
+    new_pos1_before = view1['trajs_2d'][po_valid_points]
+    new_pos1 = ravel_xy(new_pos1_before, view1['pts3d'].shape[:2])
+
+    new_pos2_before = view2['trajs_2d'][po_valid_points]
+    new_pos2 = ravel_xy(new_pos2_before, view2['pts3d'].shape[:2])
+
+    ###
+    dynamic_labels = (view1['dynamic_points'][po_valid_points] * view2['dynamic_points'][po_valid_points])
+    ###
+
     # project pixels from image1 --> 3d points --> image2 pixels
     shape1, corres1_to_2 = reproject_view(view1['pts3d'], view2)
     shape2, corres2_to_1 = reproject_view(view2['pts3d'], view1)
@@ -32,46 +129,91 @@ def extract_correspondences_from_pts3d(view1, view2, target_n_corres, rng=np.ran
 
     if target_n_corres is None:
         if ret_xy:
-            pos1 = unravel_xy(pos1, shape1)
-            pos2 = unravel_xy(pos2, shape2)
-        return pos1, pos2
+            #pos1 = unravel_xy(pos1, shape1)
+            #pos2 = unravel_xy(pos2, shape2)
+            new_pos1 = unravel_xy(new_pos1, shape1)
+            new_pos2 = unravel_xy(new_pos2, shape2)
+        #return pos1, pos2
+        return new_pos1, new_pos2
 
     available_negatives = min((~is_reciprocal1).sum(), (~is_reciprocal2).sum())
     target_n_positives = int(target_n_corres * (1 - nneg))
-    n_positives = min(len(pos1), target_n_positives)
+    #print(f"{available_negatives=}, {target_n_positives=}, {target_n_corres=}")
+    #n_positives = min(len(pos1), target_n_positives)
+    n_positives = min(len(new_pos1), target_n_positives)
     n_negatives = min(target_n_corres - n_positives, available_negatives)
 
-    if n_negatives + n_positives != target_n_corres:
-        # should be really rare => when there are not enough negatives
-        # in that case, break nneg and add a few more positives ?
-        n_positives = target_n_corres - n_negatives
-        assert n_positives <= len(pos1)
+    #if n_negatives + n_positives != target_n_corres:
+    #    # should be really rare => when there are not enough negatives
+    #    # in that case, break nneg and add a few more positives ?
+    #    n_positives = target_n_corres - n_negatives
+    #    #assert n_positives <= len(pos1)
+    #    assert n_positives <= len(new_pos1)
 
-    assert n_positives <= len(pos1)
-    assert n_positives <= len(pos2)
+    # If not enough negatives, we will have to create negatives
+    extra_negatives = 0
+    if n_negatives + n_positives != target_n_corres:
+        extra_negatives = target_n_corres - (n_negatives + n_positives)
+    #print(f"{n_positives=}, {n_negatives=}, {extra_negatives=}")
+
+    #assert n_positives <= len(pos1)
+    #assert n_positives <= len(pos2)
+    assert n_positives <= len(new_pos1)
+    assert n_positives <= len(new_pos2)
+
     assert n_negatives <= (~is_reciprocal1).sum()
     assert n_negatives <= (~is_reciprocal2).sum()
-    assert n_positives + n_negatives == target_n_corres
+    #assert n_positives + n_negatives == target_n_corres
+    assert n_positives + n_negatives + extra_negatives == target_n_corres
 
     valid = np.ones(n_positives, dtype=bool)
     if n_positives < len(pos1):
         # random sub-sampling of valid correspondences
-        perm = rng.permutation(len(pos1))[:n_positives]
-        pos1 = pos1[perm]
-        pos2 = pos2[perm]
+        #perm = rng.permutation(len(pos1))[:n_positives]
+        #pos1 = pos1[perm]
+        #pos2 = pos2[perm]
+        perm = rng.permutation(len(new_pos1))[:n_positives]
+        new_pos1 = new_pos1[perm]
+        new_pos2 = new_pos2[perm]
+        dynamic_labels = dynamic_labels[perm]
+    #print(f"Positives -> {new_pos1.shape=}, {new_pos2.shape=}, {valid.shape=}")
 
     if n_negatives > 0:
         # add false correspondences if not enough
         def norm(p): return p / p.sum()
-        pos1 = np.r_[pos1, rng.choice(shape1[0] * shape1[1], size=n_negatives, replace=False, p=norm(~is_reciprocal1))]
-        pos2 = np.r_[pos2, rng.choice(shape2[0] * shape2[1], size=n_negatives, replace=False, p=norm(~is_reciprocal2))]
+        #pos1 = np.r_[pos1, rng.choice(shape1[0] * shape1[1], size=n_negatives, replace=False, p=norm(~is_reciprocal1))]
+        #pos2 = np.r_[pos2, rng.choice(shape2[0] * shape2[1], size=n_negatives, replace=False, p=norm(~is_reciprocal2))]
+        new_pos1 = np.r_[new_pos1, rng.choice(shape1[0] * shape1[1], size=n_negatives, replace=False, p=norm(~is_reciprocal1))]
+        new_pos2 = np.r_[new_pos2, rng.choice(shape2[0] * shape2[1], size=n_negatives, replace=False, p=norm(~is_reciprocal2))]
         valid = np.r_[valid, np.zeros(n_negatives, dtype=bool)]
+        dynamic_labels = np.r_[dynamic_labels, np.zeros(n_negatives, dtype=bool)]
+    #print(f"Negatives -> {new_pos1.shape=}, {new_pos2.shape=}, {valid.shape=}")
+
+    if extra_negatives > 0:
+        max_idx = len(corres1_to_2)
+        extra_negs_pos1, extra_negs_pos2 = [], []
+        extra_negs_found = 0
+        while extra_negs_found < extra_negatives:
+            extra_neg_1, extra_neg_2 = np.random.randint(0, max_idx, size=1)[0], np.random.randint(0, max_idx, size=1)[0]
+            temp_pos1_idx = np.where(new_pos1 == extra_neg_1)
+            if np.sum(new_pos2[temp_pos1_idx] == extra_neg_2) == 0:
+                extra_negs_found += 1
+                extra_negs_pos1.append(extra_neg_1)
+                extra_negs_pos2.append(extra_neg_2)
+        new_pos1 = np.r_[new_pos1, np.array(extra_negs_pos1)]
+        new_pos2 = np.r_[new_pos2, np.array(extra_negs_pos2)]
+        valid = np.r_[valid, np.zeros(extra_negatives, dtype=bool)]
+        dynamic_labels = np.r_[dynamic_labels, np.zeros(extra_negatives, dtype=bool)]
+    #print(f"Extra Negatives -> {new_pos1.shape=}, {new_pos2.shape=}, {valid.shape=}")
 
     # convert (x+W*y) back to 2d (x,y) coordinates
     if ret_xy:
-        pos1 = unravel_xy(pos1, shape1)
-        pos2 = unravel_xy(pos2, shape2)
-    return pos1, pos2, valid
+        #pos1 = unravel_xy(pos1, shape1)
+        #pos2 = unravel_xy(pos2, shape2)
+        new_pos1 = unravel_xy(new_pos1, shape1)
+        new_pos2 = unravel_xy(new_pos2, shape2)
+    #return pos1, pos2, valid
+    return new_pos1, new_pos2, valid, dynamic_labels
 
 
 def reproject_view(pts3d, view2):
